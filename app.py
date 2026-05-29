@@ -1,10 +1,40 @@
-﻿import re
+﻿import os
+import re
+import uuid
+import tempfile
 import requests
+from http.cookiejar import MozillaCookieJar
 # pyrefly: ignore [missing-import]
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 import yt_dlp
 
 app = Flask(__name__)
+
+cookie_storage = {}
+
+def save_uploaded_cookie(cookie_file):
+    if not cookie_file or cookie_file.filename == '':
+        return None
+    token = str(uuid.uuid4())
+    temp_path = os.path.join(tempfile.gettempdir(), f'yt_cookies_{token}.txt')
+    cookie_file.save(temp_path)
+    cookie_storage[token] = temp_path
+    return token
+
+
+def get_cookie_path(token):
+    return cookie_storage.get(token)
+
+
+def load_cookies_from_file(cookie_path):
+    if not cookie_path or not os.path.exists(cookie_path):
+        return None
+    cookie_jar = MozillaCookieJar()
+    try:
+        cookie_jar.load(cookie_path, ignore_discard=True, ignore_expires=True)
+    except Exception:
+        return None
+    return requests.utils.cookiejar_from_dict({cookie.name: cookie.value for cookie in cookie_jar})
 
 # Memastikan judul file aman untuk disimpan
 def sanitize_filename(filename):
@@ -20,9 +50,17 @@ def favicon():
 
 @app.route('/api/info', methods=['POST'])
 def get_video_info():
-    data = request.get_json()
-    url = data.get('url')
-    
+    url = None
+    cookie_token = None
+
+    if request.is_json:
+        data = request.get_json(silent=True) or {}
+        url = data.get('url')
+    else:
+        url = request.form.get('url')
+        cookie_file = request.files.get('cookie_file')
+        cookie_token = save_uploaded_cookie(cookie_file) if cookie_file else None
+
     if not url:
         return jsonify({'error': 'URL tidak boleh kosong'}), 400
         
@@ -31,6 +69,11 @@ def get_video_info():
         'quiet': True,
         'no_warnings': True,
     }
+    
+    if cookie_token:
+        cookie_path = get_cookie_path(cookie_token)
+        if cookie_path:
+            ydl_opts['cookiefile'] = cookie_path
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -122,7 +165,8 @@ def get_video_info():
                 'duration': duration_str,
                 'uploader': uploader,
                 'formats': formats_list,
-                'original_url': url
+                'original_url': url,
+                'cookie_token': cookie_token
             })
             
     except Exception as e:
@@ -132,6 +176,8 @@ def get_video_info():
 def download_video():
     video_url = request.args.get('url')
     format_id = request.args.get('format_id')
+    cookie_token = request.args.get('token')
+    cookie_path = get_cookie_path(cookie_token) if cookie_token else None
     
     if not video_url or not format_id:
         return 'Parameter tidak lengkap', 400
@@ -141,6 +187,9 @@ def download_video():
         'quiet': True,
         'no_warnings': True,
     }
+    
+    if cookie_path:
+        ydl_opts['cookiefile'] = cookie_path
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -167,7 +216,13 @@ def download_video():
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
             
-            req_stream = requests.get(direct_url, headers=headers, stream=True, timeout=30)
+            session = requests.Session()
+            if cookie_path:
+                cookies = load_cookies_from_file(cookie_path)
+                if cookies is not None:
+                    session.cookies = cookies
+
+            req_stream = session.get(direct_url, headers=headers, stream=True, timeout=30)
             
             def generate():
                 for chunk in req_stream.iter_content(chunk_size=8192):

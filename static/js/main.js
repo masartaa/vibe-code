@@ -1,6 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     const downloadForm = document.getElementById('download-form');
     const videoUrlInput = document.getElementById('video-url');
+    const cookieFileInput = document.getElementById('cookie-file');
     const submitBtn = document.getElementById('submit-btn');
     
     const errorCard = document.getElementById('error-card');
@@ -39,15 +40,18 @@ document.addEventListener('DOMContentLoaded', () => {
         setButtonLoadingState(true);
 
         try {
+            const formData = new FormData();
+            formData.append('url', url);
+            if (cookieFileInput && cookieFileInput.files.length > 0) {
+                formData.append('cookie_file', cookieFileInput.files[0]);
+            }
+
             const response = await fetch('/api/info', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ url: url })
+                body: formData
             });
 
-            const data = await response.get_json ? await response.get_json() : await response.json();
+            const data = await response.json();
 
             if (!response.ok) {
                 throw new Error(data.error || 'Terjadi kesalahan sistem.');
@@ -114,7 +118,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const extBadge = `<span class="px-2 py-0.5 rounded bg-slate-900 text-slate-400 text-xs font-semibold uppercase">${f.ext}</span>`;
 
             // Tombol download
-            const downloadUrl = `/api/download?url=${encodeURIComponent(data.original_url)}&format_id=${encodeURIComponent(f.format_id)}`;
+            const cookieQuery = data.cookie_token ? `&token=${encodeURIComponent(data.cookie_token)}` : '';
+        const downloadUrl = `/api/download?url=${encodeURIComponent(data.original_url)}&format_id=${encodeURIComponent(f.format_id)}${cookieQuery}`;
 
             tr.innerHTML = `
                 <td class="px-5 py-4 whitespace-nowrap text-sm font-bold text-white">
